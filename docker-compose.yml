@@ -30,6 +30,10 @@ x-qwen: &qwen
       required: false
   environment:
     HOME: /cache
+    VISION: "1"
+    CTX: "huge"
+    MAX_LEN: "262144"
+    EXTRA_ARGS: "--enable-auto-tool-choice --tool-call-parser qwen3_coder"
   volumes:
     - ${MODELS_DIR:-./models}:/app/models
     - qwen-cache:/cache
@@ -73,4 +77,4 @@ services:
     command: batch
 
 volumes:
-  qwen-cache:
+  qwen-cache: {}

@@ -1,0 +1,54 @@
+# ---------------------------------------------------------------------------
+# Agent-farm overlay: many concurrent AI coding agents against ONE server.
+# Layer it on top of the stock compose file (later -f files win per-key):
+#
+#   docker compose -f docker-compose.yml -f compose.agents.yaml \
+#     --profile single up -d --force-recreate
+#
+# Why these knobs (numbers from single-user/README.md, RTX 3090 @ 250 W):
+#
+#   SPEC=mtp         DFlash2 reserves 1+k = 8 recurrent-state pages per request
+#                    (~15.8% of the token pool EACH) and runs out of residents
+#                    past ~5 streams; MTP (k+1 pages, 8.2%) fills all 8 slots.
+#                    Both are exact; only speed differs.
+#   DRAFT_TOKENS=3   4 drafts win only up to ~2 concurrent users; from C4 up the
+#                    3-draft config decodes MORE aggregate (rejected drafts cost
+#                    more in a bigger verify batch). Solo ceiling 111 -> 95 tok/s,
+#                    concurrency capacity roughly doubles (fp8 KV holds 2x tokens).
+#   CTX=huge         KVarN 4/2-bit KV (kvarn/, built into the image): full 262,144
+#                    context via MAX_LEN=262144 (MTP keeps the ~292k-token pool;
+#                    DFlash2 is capped at 245760). The knob takes fast|long|huge --
+#                    NEVER a number: CTX=262144 falls back to defaults and silently
+#                    downgrades SPEC=dflash2 to mtp.
+#   PREFIX_CACHE=1   Agents share giant system prompts + tool schemas; the shared
+#                    prefix is prefilled once, not once per request (64 reqs x
+#                    5.8k prompt: 222 s -> 17 s). Costs ~14% of the token pool,
+#                    nothing on traffic without shared prefixes.
+#   VISION=0         Drops the resident vision tower (0.858 GiB back to the pool).
+#                    Set back to 1 only if you send images to the model.
+#
+# MAX_SEQS stays at the script default (8): past 8 slots every extra request
+# just queues, because each speculating request pins k+1 state pages. Raise it
+# only after bench/conc_ladder.py says the pool can take it.
+#
+# When this box tops out (~400 tok/s aggregate, hard GPU ceiling): add another
+# box running the same two files and put a router (LiteLLM / vllm bench serve
+# behind nginx) in front -- clients keep the same OpenAI-compatible API.
+
+services:
+  single:
+    environment:
+      CTX: "huge"
+      MAX_LEN: "262144"
+      SPEC: "mtp"
+      DRAFT_TOKENS: "3"
+      PREFIX_CACHE: "1"
+      VISION: "1"
+      # Re-specify tool flags (this replaces the base file's EXTRA_ARGS wholesale)
+      # and raise the per-prompt image cap above the script's default count:1 --
+      # sanctioned override point: EXTRA_ARGS expands AFTER VISION_ARGS in the
+      # exec line, so argparse takes this --limit-mm-per-prompt as final.
+      # Cost: vLLM profiles the encoder per image slot at startup (~2048 img
+      # tokens each), trimming the KV pool slightly. Drop to 2-3 if you want
+      # the pool back; agents needing more than 4 images/turn should split turns.
+      EXTRA_ARGS: '--enable-auto-tool-choice --tool-call-parser qwen3_coder --limit-mm-per-prompt {"image":{"count":16}}'
